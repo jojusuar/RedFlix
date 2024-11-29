@@ -4,8 +4,8 @@
 #include "common.h"
 
 #define READ_SIZE 4096 //reads this amount of bytes at a time from the txt file
-#define STREAMER_BUFFER_SIZE 256 // max number of values that can be parsed before the streamer starts sending blocks
-#define OUTPUT_BLOCK_SIZE 32 // number of values in each block streamed to the client
+#define STREAMER_BUFFER_SIZE 32 // max number of values that can be parsed before the streamer starts sending blocks
+#define OUTPUT_BLOCK_SIZE 16 // number of values in each block streamed to the client
 
 typedef struct {
     int fd;
@@ -19,9 +19,17 @@ typedef struct {
     sem_t mutex;
     sem_t full;
     sem_t empty;
+    int fd;
 } StreamerBuffer;
 
+typedef struct {
+    StreamerBuffer *streamer_buffer;
+    char *bitrate;
+    sem_t bitrate_mutex;
+} EncoderData;
+
 void *workerThread( void * );
+void *encoder( void * );
 void *streamer( void * );
 
 int video_fd;
@@ -29,41 +37,32 @@ int video_fd;
 int main(int argc, char* argv[]){
     video_fd = open("video.txt", O_RDONLY);
 
-    // int listenfd;
-    // unsigned int clientlen;
-    // struct sockaddr_in clientaddr;
-    // char *port = "8080";
-    // listenfd = open_listenfd(port);
+    int listenfd;
+    unsigned int clientlen;
+    struct sockaddr_in clientaddr;
+    char *port = "8080";
+    listenfd = open_listenfd(port);
 
-    // if (listenfd < 0){
-	// 	connection_error(listenfd);
-    // }
-    // pthread_t *tid = NULL;
-    // while(true){
-    //     clientlen = sizeof(clientaddr);
-    //     int *connfd = (int *)malloc(sizeof(int));
-	// 	*connfd = accept(listenfd, (struct sockaddr *)&clientaddr, &clientlen);
-    //     pthread_create(tid, NULL, workerThread, (void *)connfd);
-    // }
-
-    int *connfd = (int *)malloc(sizeof(int));
+    if (listenfd < 0){
+		connection_error(listenfd);
+    }
     pthread_t tid;
-    pthread_create(&tid, NULL, workerThread, (void *)connfd);
-    while(true);
+    while(true){
+        clientlen = sizeof(clientaddr);
+        int *connfd = (int *)malloc(sizeof(int));
+		*connfd = accept(listenfd, (struct sockaddr *)&clientaddr, &clientlen);
+        pthread_create(&tid, NULL, workerThread, (void *)connfd);
+    }
 }
 
 void *workerThread(void *arg){
     int connfd = *((int *)arg);
 	free(arg);
     pthread_detach(pthread_self());
-    ThreadData thread_data;
-    thread_data.fd = video_fd;
-    thread_data.offset = 0;
-    thread_data.size = READ_SIZE;
-    thread_data.thread_id = pthread_self();
     
     StreamerBuffer *streamer_buffer = (StreamerBuffer *)malloc(sizeof(StreamerBuffer));
     streamer_buffer->buffer = (int *)malloc(STREAMER_BUFFER_SIZE*sizeof(int));
+    streamer_buffer->fd = connfd;
     sem_init(&(streamer_buffer->mutex), 0, 1);
     sem_init(&(streamer_buffer->empty), 0, STREAMER_BUFFER_SIZE);
     sem_init(&(streamer_buffer->full), 0, 0);
@@ -71,7 +70,40 @@ void *workerThread(void *arg){
     pthread_t streamer_tid;
     pthread_create(&streamer_tid, NULL, streamer, (void *)streamer_buffer);
 
-    char *bitrate = "LD";
+    char *bitrate = (char *)malloc(3*sizeof(char));
+    strcpy(bitrate, "HD");
+    EncoderData *encoder_data = (EncoderData *)malloc(sizeof(EncoderData));
+    encoder_data->streamer_buffer = streamer_buffer;
+    encoder_data->bitrate = bitrate;
+    sem_init(&(encoder_data->bitrate_mutex), 0, 1);
+
+    pthread_t encoder_tid;
+    pthread_create(&encoder_tid, NULL, encoder, (void *)encoder_data);
+    while(true){
+        printf("Attempting to read options\n");
+        char received[3];
+        read(connfd, received, 2);
+        received[3] = '\0';
+        sem_wait(&(encoder_data->bitrate_mutex));
+        strcpy(bitrate, received);
+        bitrate[3] = '\0';
+        printf("bitrate set to %s\n", bitrate);
+        sem_post(&(encoder_data->bitrate_mutex));
+    }
+}
+
+void *encoder(void *arg){
+    EncoderData *encoder_data = (EncoderData *)arg;
+    pthread_detach(pthread_self());
+
+    StreamerBuffer *streamer_buffer = encoder_data->streamer_buffer;
+    char *bitrate = encoder_data->bitrate;
+
+    ThreadData thread_data;
+    thread_data.fd = video_fd;
+    thread_data.offset = 0;
+    thread_data.size = READ_SIZE;
+    thread_data.thread_id = pthread_self();
 
     char *read_buffer = (char *)malloc(thread_data.size + 1);
 
@@ -81,7 +113,7 @@ void *workerThread(void *arg){
     int previous = -1;
     int piece = -1;
     ssize_t bytes_read;
-
+    
     while ((bytes_read = pread(thread_data.fd, read_buffer, thread_data.size, thread_data.offset)) > 0) {
         thread_data.offset += bytes_read;
         read_buffer[bytes_read] = '\0';
@@ -90,6 +122,12 @@ void *workerThread(void *arg){
             free(read_buffer);
             pthread_exit(NULL);
         }
+
+        char *selected;
+        sem_wait(&(encoder_data->bitrate_mutex));
+        selected = bitrate;
+        printf("bitrate is supposedly %s\n", selected);
+        sem_post(&(encoder_data->bitrate_mutex));
        
         char *number_string = strtok(read_buffer, ",");
         while(number_string){
@@ -110,17 +148,20 @@ void *workerThread(void *arg){
                     piece = -1;
                 }
 
-                if(strcmp(bitrate, "MD") == 0){
+                if(strcmp(selected, "MD") == 0){  // MD encoder
                     if(counter == 0) add_current_number = true;
                     else add_current_number = false;
                     counter = (counter + 1)%10;
                 }
 
-                else if(strcmp(bitrate, "LD") == 0){
+                else if(strcmp(selected, "LD") == 0){ // LD encoder
                     if(counter == 0) add_current_number = true;
                     else add_current_number = false;
                     counter = (counter + 1)%100;
                 }
+
+                /*Since the encoders are mutually exclusive, HD will be the default 
+                if none of above are activated*/
 
                 if(add_current_number){
                     sem_wait(&(streamer_buffer->empty));
@@ -169,14 +210,11 @@ void *streamer(void *arg){
         j = (j + 1)%STREAMER_BUFFER_SIZE;
         
         if(i == 0 || eof){
-            printf("NUEVO BLOQUE: ");
-            for(int index = 0; index < OUTPUT_BLOCK_SIZE; index++){
-                printf("%d\n", to_send[index]);
-                usleep(1000);
-                if(to_send[index] == -1) {
-                    printf("fin del video!\n");
-                    break;
-                }
+            write(streamer_buffer->fd, to_send, OUTPUT_BLOCK_SIZE*sizeof(int));
+            usleep(1000*10*16);
+            if(eof){
+                printf("Finished!\n");
+                break;
             }
         }
     } while (true);
