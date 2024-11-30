@@ -15,8 +15,7 @@ int main() {
             }
             printf("%d\n", received[i]);
             fflush(stdout);
-            usleep(1000*10);
-            
+            usleep(1000*10); /*simulates frame pacing*/
         }
     }
     close(read_fd);

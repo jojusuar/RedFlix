@@ -211,7 +211,10 @@ void *streamer(void *arg){
         
         if(i == 0 || eof){
             write(streamer_buffer->fd, to_send, OUTPUT_BLOCK_SIZE*sizeof(int));
-            usleep(1000*10*16);
+            usleep(1000*10*16);/* simulates the latency of sending massive amounts of data over the network,
+            otherwise the file would be completely sent and buffered by the client in a moment
+            without giving them the chance to change bitrate quality.
+            */
             if(eof){
                 printf("Finished!\n");
                 break;
