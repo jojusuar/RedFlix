@@ -1,6 +1,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <fcntl.h>
+#include <signal.h>
 #include "common.h"
 
 #define READ_SIZE 4096 //reads this amount of bytes at a time from the txt file
@@ -28,6 +29,7 @@ void *streamer( void * );
 int video_fd;
 
 int main(int argc, char* argv[]){
+    signal(SIGPIPE, SIG_IGN);
     video_fd = open("video.txt", O_RDONLY);
     int listenfd;
     unsigned int clientlen;
@@ -38,6 +40,7 @@ int main(int argc, char* argv[]){
     if (listenfd < 0){
 		connection_error(listenfd);
     }
+    printf("Server listening on port %s.\n", port);
     pthread_t tid;
     while(true){
         clientlen = sizeof(clientaddr);
@@ -51,7 +54,7 @@ void *workerThread(void *arg){
     int connfd = *((int *)arg);
 	free(arg);
     pthread_detach(pthread_self());
-    printf("Atendiendo a FD: %d\n", connfd);
+    printf("Connection established with FD: %d\n", connfd);
     
     StreamerBuffer *streamer_buffer = (StreamerBuffer *)malloc(sizeof(StreamerBuffer));
     streamer_buffer->buffer = (int *)malloc(STREAMER_BUFFER_SIZE*sizeof(int));
@@ -72,10 +75,24 @@ void *workerThread(void *arg){
 
     pthread_t encoder_tid;
     pthread_create(&encoder_tid, NULL, encoder, (void *)encoder_data);
+
+    char received[3];
+    ssize_t bytes_read = 0;
     while(true){
-        char received[3];
-        read(connfd, received, 2);
+        bytes_read = read(connfd, received, 2);
         received[3] = '\0';
+        if(strcmp(received, "QT") == 0 || bytes_read < 0){
+            close(connfd);
+            pthread_join(streamer_tid, NULL);
+            pthread_cancel(encoder_tid);
+            pthread_join(encoder_tid, NULL);
+            free(bitrate);
+            free(streamer_buffer->buffer);
+            free(streamer_buffer);
+            free(encoder_data);
+            printf("Connection with FD %d successfully terminated.\n",connfd);
+            pthread_exit(NULL);
+        }
         sem_wait(&(encoder_data->bitrate_mutex));
         strcpy(bitrate, received);
         bitrate[3] = '\0';
@@ -84,30 +101,29 @@ void *workerThread(void *arg){
 }
 
 void *encoder(void *arg){
+    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+    pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
     EncoderData *encoder_data = (EncoderData *)arg;
-    pthread_detach(pthread_self());
 
     StreamerBuffer *streamer_buffer = encoder_data->streamer_buffer;
     char *bitrate = encoder_data->bitrate;
-
-    char *read_buffer = (char *)malloc(READ_SIZE + 1);
+   
+    char read_buffer[READ_SIZE + 1];
     
     int i = 0;
     int counter = 0;
     bool add_current_number = true;
-    int previous = -1;
-    int piece = -1;
+    volatile int previous = -1;
+    volatile int piece = -1;
 
     off_t offset = 0;
-    ssize_t bytes_read;
+    ssize_t bytes_read = 0;
     
     do {
         bytes_read = pread(video_fd, read_buffer, READ_SIZE, offset);
         offset += bytes_read;
         read_buffer[bytes_read] = '\0';
         if (bytes_read < 0) {
-            perror("pread");
-            free(read_buffer);
             pthread_exit(NULL);
         }
 
@@ -120,21 +136,21 @@ void *encoder(void *arg){
         char *number_string = strtok_r(read_buffer, ",", &saveptr);
         while(number_string){
             int number = atoi(number_string);
-            // if(number < previous && piece == -1){  /* Es muy probable que el número de bytes leídos
-            // no encaje con los separadores entre los números, por lo que cada lectura,
-            // un número podría ser truncado. La única manera de que un número
-            // sea menor al anterior es que haya sido truncado, asi que lo almacenamos 
-            // para juntarlo con el siguiente*/ 
-            //     piece = number;
-            // }
-            // else{
-            //     if(piece != -1){
-            //         char *whole = (char *)malloc(6*sizeof(char)); //un numero hasta 99'999 tiene hasta 5 cifras, mas 1 de null terminator
-            //         sprintf(whole, "%d%d", piece, number);
-            //         number = atoi(whole);
-            //         free(whole);
-            //         piece = -1;
-            //     }
+            if(number < previous && piece == -1){  /* It is very likely that the number of bytes read 
+            will not match the separators between the numbers, so that each read,
+            a number could be truncated. The only way for a number
+            to be less than the previous one is if it has been truncated,
+             so we store it to join it with the next one */
+                piece = number;
+            }
+            else{
+                if(piece != -1){
+                    char *whole = (char *)malloc(6*sizeof(char)); // a number up to 99'999 has up to 5 digits, plus 1 for null terminator
+                    sprintf(whole, "%d%d", piece, number);
+                    number = atoi(whole);
+                    free(whole);
+                    piece = -1;
+                }
 
                 if(strcmp(selected, "MD") == 0){  // MD encoder
                     if(counter == 0) add_current_number = true;
@@ -161,7 +177,7 @@ void *encoder(void *arg){
                     sem_post(&(streamer_buffer->full));
                     i = (i + 1)%STREAMER_BUFFER_SIZE;
                 }
-            //}
+            }
             number_string = number_string = strtok_r(NULL, ",", &saveptr);
             previous = number;
         }
@@ -169,15 +185,16 @@ void *encoder(void *arg){
     sem_wait(&(streamer_buffer->empty));
     sem_wait(&(streamer_buffer->mutex));
     
-    streamer_buffer->buffer[i] = -1; //indica el fin del video
+    streamer_buffer->buffer[i] = -1; // end of the video indicator
 
     sem_post(&(streamer_buffer->mutex));
     sem_post(&(streamer_buffer->full));
+    pthread_exit(NULL);
 }
+
 
 void *streamer(void *arg){
     StreamerBuffer *streamer_buffer = (StreamerBuffer *)arg;
-    pthread_detach(pthread_self());
     int i = 0;
     int j = 0;
     int to_send[OUTPUT_BLOCK_SIZE];
@@ -198,16 +215,14 @@ void *streamer(void *arg){
         j = (j + 1)%STREAMER_BUFFER_SIZE;
         
         if(i == 0 || eof){
-            write(streamer_buffer->fd, to_send, OUTPUT_BLOCK_SIZE*sizeof(int));
+            ssize_t bytes_written = write(streamer_buffer->fd, to_send, OUTPUT_BLOCK_SIZE*sizeof(int));
+            if(eof || bytes_written < 0){
+                pthread_exit(NULL);
+            }
             usleep(1000*10*16);/* simulates the latency of sending massive amounts of data over the network,
             otherwise the file would be completely sent and buffered by the client in a moment
             without giving them the chance to change bitrate quality.
             */
-            if(eof){
-                printf("Finished!\n");
-                break;
-            }
         }
     } while (true);
-    return NULL;
 }

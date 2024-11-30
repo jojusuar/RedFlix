@@ -52,4 +52,5 @@ int open_clientfd(char *hostname, char *port);
  */
 void connection_error(int connfd);
 
+
 #endif /* COMMON_H */

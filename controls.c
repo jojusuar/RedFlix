@@ -47,5 +47,7 @@ int main(int argc, char *argv[]){
             refresh();
         }
     }
+    write(fifo_fd, "QT", msg_size);
+    close(fifo_fd);
     endwin();
 }

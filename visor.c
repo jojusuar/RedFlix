@@ -17,7 +17,7 @@ int main() {
         random_number[i] = '0' + (rand() % 10);
     }
     random_number[16] = '\0';
-    char fifo_path[28] = "/tmp/myfifo";
+    char fifo_path[28] = FIFO_PREFIX;
     strcat(fifo_path, random_number);
     mkfifo(fifo_path, 0666);
     if(fork() == 0){
@@ -61,6 +61,11 @@ int main() {
             int *connfd_ptr = (int *)malloc(sizeof(int));
             pthread_create(&tid, NULL, visorThread, (void *)&connfd);
         }
+        if(strcmp(command, "QT") == 0 && connfd != -1){
+            write(connfd, "QT", command_size);
+            close(connfd);
+            break;
+        }
     }
     close(fifo_fd);
     return 0;
@@ -75,11 +80,11 @@ void *visorThread(void *arg){
         for(int i = 0; i < 16; i++){
             if(received[i] == -1){
                 printf("Video finished!\n");
+                write(connfd, "QT", 2);
                 break;
             }
             printf("%d\n", received[i]);
             usleep(1000*10); /*simulates frame pacing*/
         }
     }
-    close(connfd);
 }
