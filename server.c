@@ -8,13 +8,6 @@
 #define OUTPUT_BLOCK_SIZE 16 // number of values in each block streamed to the client
 
 typedef struct {
-    int fd;
-    off_t offset;
-    size_t size;
-    int thread_id;
-} ThreadData;
-
-typedef struct {
     int *buffer;
     sem_t mutex;
     sem_t full;
@@ -36,7 +29,6 @@ int video_fd;
 
 int main(int argc, char* argv[]){
     video_fd = open("video.txt", O_RDONLY);
-
     int listenfd;
     unsigned int clientlen;
     struct sockaddr_in clientaddr;
@@ -59,6 +51,7 @@ void *workerThread(void *arg){
     int connfd = *((int *)arg);
 	free(arg);
     pthread_detach(pthread_self());
+    printf("Atendiendo a FD: %d\n", connfd);
     
     StreamerBuffer *streamer_buffer = (StreamerBuffer *)malloc(sizeof(StreamerBuffer));
     streamer_buffer->buffer = (int *)malloc(STREAMER_BUFFER_SIZE*sizeof(int));
@@ -80,14 +73,12 @@ void *workerThread(void *arg){
     pthread_t encoder_tid;
     pthread_create(&encoder_tid, NULL, encoder, (void *)encoder_data);
     while(true){
-        printf("Attempting to read options\n");
         char received[3];
         read(connfd, received, 2);
         received[3] = '\0';
         sem_wait(&(encoder_data->bitrate_mutex));
         strcpy(bitrate, received);
         bitrate[3] = '\0';
-        printf("bitrate set to %s\n", bitrate);
         sem_post(&(encoder_data->bitrate_mutex));
     }
 }
@@ -99,23 +90,20 @@ void *encoder(void *arg){
     StreamerBuffer *streamer_buffer = encoder_data->streamer_buffer;
     char *bitrate = encoder_data->bitrate;
 
-    ThreadData thread_data;
-    thread_data.fd = video_fd;
-    thread_data.offset = 0;
-    thread_data.size = READ_SIZE;
-    thread_data.thread_id = pthread_self();
-
-    char *read_buffer = (char *)malloc(thread_data.size + 1);
-
+    char *read_buffer = (char *)malloc(READ_SIZE + 1);
+    
     int i = 0;
     int counter = 0;
     bool add_current_number = true;
     int previous = -1;
     int piece = -1;
+
+    off_t offset = 0;
     ssize_t bytes_read;
     
-    while ((bytes_read = pread(thread_data.fd, read_buffer, thread_data.size, thread_data.offset)) > 0) {
-        thread_data.offset += bytes_read;
+    do {
+        bytes_read = pread(video_fd, read_buffer, READ_SIZE, offset);
+        offset += bytes_read;
         read_buffer[bytes_read] = '\0';
         if (bytes_read < 0) {
             perror("pread");
@@ -126,27 +114,27 @@ void *encoder(void *arg){
         char *selected;
         sem_wait(&(encoder_data->bitrate_mutex));
         selected = bitrate;
-        printf("bitrate is supposedly %s\n", selected);
         sem_post(&(encoder_data->bitrate_mutex));
        
-        char *number_string = strtok(read_buffer, ",");
+        char *saveptr; // Save state for strtok_r
+        char *number_string = strtok_r(read_buffer, ",", &saveptr);
         while(number_string){
             int number = atoi(number_string);
-            if(number < previous && piece == -1){  /* Es muy probable que el número de bytes leídos
-            no encaje con los separadores entre los números, por lo que cada lectura,
-            un número podría ser truncado. La única manera de que un número
-            sea menor al anterior es que haya sido truncado, asi que lo almacenamos 
-            para juntarlo con el siguiente*/ 
-                piece = number;
-            }
-            else{
-                if(piece != -1){
-                    char *whole = (char *)malloc(6*sizeof(char)); //un numero hasta 99'999 tiene hasta 5 cifras, mas 1 de null terminator
-                    sprintf(whole, "%d%d", piece, number);
-                    number = atoi(whole);
-                    free(whole);
-                    piece = -1;
-                }
+            // if(number < previous && piece == -1){  /* Es muy probable que el número de bytes leídos
+            // no encaje con los separadores entre los números, por lo que cada lectura,
+            // un número podría ser truncado. La única manera de que un número
+            // sea menor al anterior es que haya sido truncado, asi que lo almacenamos 
+            // para juntarlo con el siguiente*/ 
+            //     piece = number;
+            // }
+            // else{
+            //     if(piece != -1){
+            //         char *whole = (char *)malloc(6*sizeof(char)); //un numero hasta 99'999 tiene hasta 5 cifras, mas 1 de null terminator
+            //         sprintf(whole, "%d%d", piece, number);
+            //         number = atoi(whole);
+            //         free(whole);
+            //         piece = -1;
+            //     }
 
                 if(strcmp(selected, "MD") == 0){  // MD encoder
                     if(counter == 0) add_current_number = true;
@@ -173,11 +161,11 @@ void *encoder(void *arg){
                     sem_post(&(streamer_buffer->full));
                     i = (i + 1)%STREAMER_BUFFER_SIZE;
                 }
-            }
-            number_string = strtok(NULL, ",");
+            //}
+            number_string = number_string = strtok_r(NULL, ",", &saveptr);
             previous = number;
         }
-    }
+    } while (bytes_read > 0);
     sem_wait(&(streamer_buffer->empty));
     sem_wait(&(streamer_buffer->mutex));
     

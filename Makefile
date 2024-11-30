@@ -10,13 +10,13 @@ all: $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS) $(LFLAGS)
-	$(CC) -g -o client client.c -lncurses
+	$(CC) -g -o controls controls.c -lncurses
 	$(CC) -g -o visor visor.c
 
 %.o: %.c $(HEADERS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJS) $(TARGET) client visor
+	rm -f $(OBJS) $(TARGET) controls visor
 
 .PHONY: all clean
