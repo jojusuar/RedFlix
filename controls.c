@@ -9,14 +9,15 @@
 
 #define FIFO_PATH "/tmp/myfifo"
 
+int fifo_fd;
+
 int main(int argc, char *argv[]){
     initscr();
     noecho();
     cbreak();
     refresh();
-    printw("%s\n",argv[1]);
-    int fifo_fd = open(argv[1], O_WRONLY);
-    printw("Writer: FIFO opened for writing\n");
+    printw("*********VIDEO CONTROLS***********\n");
+    fifo_fd = open(argv[1], O_WRONLY);
     int msg_size = 2;
     int ch;
     printw("First press Shift+S to start the video!\n\n");

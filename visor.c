@@ -10,7 +10,16 @@
 
 void *visorThread( void * ); 
 
+int fifo_fd;
+
 int main() {
+    printf("*********************************************\n");
+    printf("****************VIDEO VISOR******************\n");
+    printf("*********************************************\n");
+    char ip_address[16];
+    printf("Enter server IP address (or localhost): ");
+    fgets(ip_address, sizeof(ip_address), stdin);
+    ip_address[strcspn(ip_address, "\n")] = 0;
     srand(time(NULL));
     char random_number[17];
     for (int i = 0; i < 16; i++) {
@@ -33,7 +42,7 @@ int main() {
         };
         execvp(argv[0], argv);
     }
-    int fifo_fd = open(fifo_path, O_RDONLY);
+    fifo_fd = open(fifo_path, O_RDONLY);
     int connfd = -1;
     int command_size = 2;
     char command[command_size + 1];
@@ -52,7 +61,7 @@ int main() {
             }
         }
         else if(strcmp(command, "ST") == 0) {
-            char *hostname = "localhost";
+            char *hostname = ip_address;
             char *port = "8080";
             connfd = open_clientfd(hostname, port);
             if(connfd < 0)
@@ -64,6 +73,8 @@ int main() {
         if(strcmp(command, "QT") == 0 && connfd != -1){
             write(connfd, "QT", command_size);
             close(connfd);
+            printf("Video stopped!\n");
+            printf("Disconnecting from streamer...\n");
             break;
         }
     }
@@ -74,6 +85,7 @@ int main() {
 void *visorThread(void *arg){
     int connfd = *(int *)arg;
     pthread_detach(pthread_self());
+    printf("Video starting...\n");
     int received[16];
     ssize_t bytes_read;
     while((bytes_read = read(connfd, received, 16*sizeof(int))) > 0){
@@ -87,4 +99,7 @@ void *visorThread(void *arg){
             usleep(1000*10); /*simulates frame pacing*/
         }
     }
+    printf("Disconnecting from streamer...\n");
+    close(fifo_fd);
+    exit(0);
 }
