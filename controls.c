@@ -25,7 +25,7 @@ int main(int argc, char *argv[]){
     printw("Shift+L for Low Definition\n");
     printw("Shift+M for Medium Definition\n");
     printw("Shift+H for High Definition\n\n");
-    printw("You can end the streaming at any time by pressing Shift+Q\n");
+    printw("You can end the streaming or close this window at any time by pressing Shift+Q\n\n");
     while ((ch = getch()) != 'Q') {
         if (ch == 'L') { 
             printw("Changing to Low Definition...\n");
