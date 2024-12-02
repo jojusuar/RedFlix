@@ -48,6 +48,7 @@ int main(int argc, char* argv[]){
 		*connfd = accept(listenfd, (struct sockaddr *)&clientaddr, &clientlen);
         pthread_create(&tid, NULL, workerThread, (void *)connfd);
     }
+    return 0;
 }
 
 void *workerThread(void *arg){
@@ -88,7 +89,11 @@ void *workerThread(void *arg){
             pthread_join(encoder_tid, NULL);
             free(bitrate);
             free(streamer_buffer->buffer);
+            sem_destroy(&(streamer_buffer->empty));
+            sem_destroy(&(streamer_buffer->full));
+            sem_destroy(&(streamer_buffer->mutex));
             free(streamer_buffer);
+            sem_destroy(&(encoder_data->bitrate_mutex));
             free(encoder_data);
             printf("Connection with FD %d successfully terminated.\n",connfd);
             pthread_exit(NULL);

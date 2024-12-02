@@ -7,8 +7,6 @@
 #include <pthread.h>
 #include <fcntl.h>
 
-#define FIFO_PATH "/tmp/myfifo"
-
 int fifo_fd;
 
 int main(int argc, char *argv[]){
@@ -51,4 +49,5 @@ int main(int argc, char *argv[]){
     write(fifo_fd, "QT", msg_size);
     close(fifo_fd);
     endwin();
+    return 0;
 }
